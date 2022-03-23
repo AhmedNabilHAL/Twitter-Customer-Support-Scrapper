@@ -15,18 +15,15 @@ class TwitterScrapper:
         self.bearer_token = os.environ.get('bearer_token')
         self.fields = fields
 
-    def extractTweetDict(self, tweet):
-        tweet_dict = {}
-        
-        for field in self.fields:
-            if isinstance(tweet[field], dict):
-                for key in tweet[field]:
-                    tweet_dict[key] = tweet[field][key]
-            
-            else:
-                tweet_dict[field] = tweet[field]
-        
-        return tweet_dict
+    def constructRowDict(self, message, reply):
+
+        return {
+            'message': message['text'],
+            'created_at': message['created_at'],
+            'conversation_id': message['conversation_id'],
+            'reply': reply['text'],
+            'reply_created_at': reply['created_at']
+        }
 
     def scrapeData(self, query, start_time=None, end_time=None):
         client = tw.Client(bearer_token=self.bearer_token, consumer_key=self.consumer_key,
@@ -36,29 +33,45 @@ class TwitterScrapper:
         df = pd.DataFrame()
         
         try:
-            tweets = client.search_recent_tweets(query=query,
+            tweets = client.search_recent_tweets(query=f'@{query}',
              tweet_fields=self.fields,
-              sort_order='relevancy', start_time=start_time, end_time=end_time, max_results=10)
+              sort_order='relevancy', start_time=start_time, end_time=end_time)
+
+            replier_id = client.get_user(username=query).data['id']
 
             if tweets.data is None:
                 return df
             
             for tweet in tweets.data:
-                tweet_dict = self.extractTweetDict(tweet)
+                # tweet_dict = self.extractTweetDict(tweet)
 
-                conversation_id = tweet_dict['conversation_id']
+                if tweet['in_reply_to_user_id'] is not None:
+                    continue
+
+                conversation_id = tweet['conversation_id']
+                author_id = tweet['author_id']
                 conversation = client.search_recent_tweets(query=f'conversation_id:{conversation_id}', 
                     tweet_fields=self.fields)
                 
                 if conversation.data is None:
                     continue 
 
-                df = pd.concat([df, pd.DataFrame(tweet_dict, index=[0])], ignore_index=True)
+                # df = pd.concat([df, pd.DataFrame(tweet_dict, index=[0])], ignore_index=True)
+                foundAuthorMsg = True
+                authorMsg = tweet
+                for reply in reversed(conversation.data):
+                    # tweet_dict = self.extractTweetDict(reply)
 
-                for reply in conversation.data:
-                    tweet_dict = self.extractTweetDict(reply)
+                    # df = pd.concat([df, pd.DataFrame(tweet_dict, index=[0])], ignore_index=True)
+                    if foundAuthorMsg is True and reply['author_id'] == replier_id:
+                        row = self.constructRowDict(authorMsg, reply)
+                        df = pd.concat([df, pd.DataFrame(row, index=[0])], ignore_index=True)
+                        foundAuthorMsg = False
+                    elif foundAuthorMsg is False and reply['author_id'] == author_id:
+                        foundAuthorMsg = True
+                        authorMsg = reply
 
-                    df = pd.concat([df, pd.DataFrame(tweet_dict, index=[0])], ignore_index=True)
+                    
 
         except BaseException as e:
             print('failed on_status, ', str(e))
